@@ -241,16 +241,20 @@ body.inspecting,body.inspecting a,body.inspecting button{cursor:crosshair}
 /* ---------- Work: horizontal pinned track ---------- */
 .work-pin{background:var(--sig)}
 .work-pin .stage{background:var(--sig);color:var(--sig-ink)}
-.work-track{position:absolute;top:0;left:0;height:100%;display:flex;align-items:center;gap:clamp(56px,calc(var(--u)*7),160px);padding:calc(var(--top) + 32px) 12vw 72px var(--pad);will-change:transform}
+.work-track{position:absolute;top:0;left:0;height:100%;display:flex;align-items:center;gap:clamp(150px,calc(var(--u)*15),360px);padding:calc(var(--top) + 32px) 12vw 72px var(--pad);will-change:transform}
 .work-intro{flex:none;width:min(30vw,560px);display:flex;flex-direction:column;justify-content:center;gap:20px;position:relative;z-index:2;background:var(--sig);padding-block:24px}
 .work-intro .eyebrow{color:var(--sig-ink)}
 .work-intro p{color:var(--sig-dim);max-width:36ch}
 .work-line{position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:0}
-.work-line path{fill:none;stroke:var(--sig-ink);stroke-width:1.5}
-.work-line rect{fill:var(--sig);stroke:var(--sig-ink);stroke-width:1.5}
-.wcard{flex:none;position:relative;z-index:1;width:clamp(280px,min(27vw,60vh),760px);text-decoration:none;color:var(--sig-ink);display:flex;flex-direction:column;gap:12px}
-.wcard.up{transform:translateY(-13%)}
-.wcard.down{transform:translateY(13%)}
+.work-line path{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.road-line{stroke:var(--sig-ink);stroke-width:1.5;stroke-linecap:square!important;stroke-linejoin:miter!important}
+.road-elbow{fill:var(--sig-ink);opacity:0;transform-box:fill-box;transform-origin:center;transform:scale(.2);transition:opacity .2s,transform .35s var(--ease-pop)}
+.road-elbow.hit{opacity:1;transform:none}
+.road-node{fill:var(--sig);stroke:var(--sig-ink);stroke-width:1.5;transition:fill .3s}
+.road-node.hit{fill:var(--sig-ink)}
+.wcard{flex:none;position:relative;z-index:1;width:clamp(280px,min(26vw,54vh),720px);text-decoration:none;color:var(--sig-ink);display:flex;flex-direction:column;gap:12px}
+.wcard.up{transform:translateY(-19%)}
+.wcard.down{transform:translateY(19%)}
 .wcard-img{position:relative;margin:0;background:var(--surface);border:1px solid var(--sig-ink);aspect-ratio:4/3;overflow:hidden}
 .wcard-img img{width:100%;height:100%;object-fit:cover;transition:transform .8s var(--ease-out)}
 .wcard:hover .wcard-img img,.wcard:focus-visible .wcard-img img{transform:scale(1.05)}
@@ -780,12 +784,14 @@ body.inspecting,body.inspecting a,body.inspecting button{cursor:crosshair}
     });
   } else cells.forEach(c => c.classList.add('in'));
 
-  /* =============== WORK: horizontal track, one straight line =============== */
+  /* =============== WORK: horizontal track + winding line =============== */
   const workPin = $('.work-pin'), track = $('.work-track'), line = $('.work-line'), wcards = $$('.wcard'), wcount = $('#workCount'), whud = $('.work-hud');
-  let travel = 0;
+  const NS = 'http://www.w3.org/2000/svg';
+  let travel = 0, road = null;
   function layoutWork() {
     if (!workPin) return;
     track.style.transform = '';
+    road = null;
     if (MOBILE() || RM) { workPin.style.height = ''; line.innerHTML = ''; return; }
     const tw = track.scrollWidth; travel = Math.max(0, tw - innerWidth);
     workPin.style.height = (travel + innerHeight * 1.15) + 'px';
@@ -793,23 +799,55 @@ body.inspecting,body.inspecting a,body.inspecting button{cursor:crosshair}
     line.setAttribute('width', tw); line.setAttribute('height', H); line.setAttribute('viewBox', `0 0 ${tw} ${H}`); line.style.width = tw + 'px'; line.style.height = H + 'px';
     const rel = el => { const r = el.getBoundingClientRect(); return { l: r.left - tr.left, r: r.right - tr.left, t: r.top - tr.top, b: r.bottom - tr.top }; };
     const imgs = wcards.map(c => rel(c.querySelector('.wcard-img')));
-    // one horizontal rail that crosses every card image
-    const top = Math.max(...imgs.map(k => k.t)), bot = Math.min(...imgs.map(k => k.b));
-    const y = Math.round(bot > top ? (top + bot) / 2 : H / 2) + .5;
-    const ir = rel($('.work-intro')), er = rel($('.work-end'));
-    const x0 = Math.round(ir.r + 8), x1 = Math.round(er.l - 8);
-    let nodes = '';
-    imgs.forEach(k => { nodes += `<rect x="${Math.round(k.l) - 5}" y="${y - 5}" width="10" height="10"/><rect x="${Math.round(k.r) - 5}" y="${y - 5}" width="10" height="10"/>`; });
-    line.innerHTML = `<path d="M${x0} ${y} H${x1}"/>${nodes}`;
-    const path = line.querySelector('path'); const len = x1 - x0; path.style.strokeDasharray = len; path.style.strokeDashoffset = len; line.dataset.len = len;
+    const ir = rel($('.work-intro .btn') || $('.work-intro')), er = rel($('.work-end .btn') || $('.work-end'));
+    let x = Math.round(ir.r), y = Math.round((ir.t + ir.b) / 2), d = `M${x} ${y}`; const segs = [];
+    const yMin = parseFloat(css('--hud-h')) + parseFloat(css('--ruler')) + 24, yMax = H - 56, amp = Math.max(60, H * 0.16);
+    let swing = 1, acc = 0; const elbows = [];
+    // each hop swings past both ends before landing, so the line meanders like a river
+    const curveTo = (nx, ny) => {
+      const my = clamp(swing > 0 ? Math.max(y, ny) + amp : Math.min(y, ny) - amp, yMin, yMax); swing = -swing;
+      const x1 = Math.round(x + (nx - x) * 0.28), x2 = Math.round(nx - (nx - x) * 0.28), m = Math.round(my);
+      const a0 = acc + Math.abs(x1 - x), a1 = a0 + Math.abs(m - y), a2 = a1 + Math.abs(x2 - x1), a3 = a2 + Math.abs(ny - m);
+      d += ` H${x1} V${m} H${x2} V${ny} H${nx}`; elbows.push([x1, y, a0], [x1, m, a1], [x2, m, a2], [x2, ny, a3]);
+      acc = a3 + Math.abs(nx - x2); x = nx; y = ny;
+    };
+    // winding line that flows straight into each project and out the other side
+    imgs.forEach(k => {
+      const cy = Math.round((k.t + k.b) / 2);
+      curveTo(Math.round(k.l), cy); segs.push(d);
+      d += ` L${Math.round(k.r)} ${cy}`; acc += Math.abs(Math.round(k.r) - x); x = Math.round(k.r);
+    });
+    curveTo(Math.round(er.l), Math.round((er.t + er.b) / 2));
+    const tmp = document.createElementNS(NS, 'path'); line.innerHTML = ''; line.appendChild(tmp);
+    const nodeLen = segs.map(sd => { tmp.setAttribute('d', sd); return tmp.getTotalLength(); });
+    tmp.setAttribute('d', d); const len = tmp.getTotalLength(); tmp.remove();
+    const nodes = imgs.map((k, i) => { const cy = Math.round((k.t + k.b) / 2); return `<rect class="road-node" x="${Math.round(k.l) - 5}" y="${cy - 5}" width="10" height="10"/><rect class="road-node out" x="${Math.round(k.r) - 5}" y="${cy - 5}" width="10" height="10"/>`; }).join('');
+    const corners = elbows.map(([ex, ey, el]) => `<rect class="road-elbow" data-l="${el}" x="${ex - 3}" y="${ey - 3}" width="6" height="6"/>`).join('');
+    line.innerHTML = `<path class="road-line" d="${d}" style="stroke-dasharray:${len};stroke-dashoffset:${len}"/>${corners}${nodes}`;
+    road = { len, nodeLen, base: line.querySelector('.road-line'), nodes: [...line.querySelectorAll('.road-node:not(.out)')], elbows: [...line.querySelectorAll('.road-elbow')], last: -1 };
+  }
+  // find the length along the road whose x matches a target (x only ever increases along the road)
+  function lenAtX(xt) {
+    const p = road.base; let lo = 0, hi = road.len;
+    for (let k = 0; k < 22; k++) { const mid = (lo + hi) / 2; if (p.getPointAtLength(mid).x < xt) lo = mid; else hi = mid; }
+    return (lo + hi) / 2;
   }
   addEventListener('resize', layoutWork); if (document.fonts) document.fonts.ready.then(layoutWork); addEventListener('load', layoutWork); layoutWork();
   APP.onFrame(() => {
     if (!workPin || MOBILE() || RM) return;
     const { p, vis } = prog(workPin); if (!vis) return;
     const q = ss(0.03, 0.97, p);
-    track.style.transform = `translate3d(${-travel * q}px,0,0)`;
-    const path = line.querySelector('path'); if (path) path.style.strokeDashoffset = (+line.dataset.len) * (1 - clamp(q * 1.05 + 0.04, 0, 1));
+    const tx = travel * q;
+    track.style.transform = `translate3d(${-tx}px,0,0)`;
+    if (road) {
+      const L = p >= 0.985 ? road.len : clamp(lenAtX(tx + innerWidth * 0.5), 0, road.len);
+      if (Math.abs(L - road.last) > 0.5) {
+        road.last = L;
+        road.base.style.strokeDashoffset = road.len - L;
+        road.nodes.forEach((n, i) => n.classList.toggle('hit', L >= road.nodeLen[i] - 2));
+        road.elbows.forEach(e => e.classList.toggle('hit', L >= +e.dataset.l - 1));
+      }
+    }
     if (whud) whud.style.setProperty('--p', q.toFixed(3));
     if (wcount) { const mid = innerWidth * 0.55; let best = 0, bd = 1e9; wcards.forEach((c, i) => { const r = c.getBoundingClientRect(); const dd = Math.abs(r.left + r.width / 2 - mid); if (dd < bd) { bd = dd; best = i; } }); const s = String(best + 1).padStart(2, '0') + ' / ' + String(wcards.length).padStart(2, '0'); if (wcount.textContent !== s) wcount.textContent = s; }
   });
